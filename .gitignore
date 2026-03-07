@@ -1,0 +1,11 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+data/*.db
+data/*.json
+output/
+bot.log
+*.log
+.stop
+_*.py

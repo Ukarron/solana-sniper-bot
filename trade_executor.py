@@ -28,7 +28,10 @@ class TradeExecutor:
             swap_url=cfg.jupiter_swap_url,
         )
         self.jito = JitoClient(cfg.jito_endpoint) if cfg.use_jito else None
-        self.wallet_pool = WalletPool.from_private_key(cfg.private_key)
+        if cfg.paper_trading:
+            self.wallet_pool = WalletPool.generate(1)
+        else:
+            self.wallet_pool = WalletPool.from_private_key(cfg.private_key)
 
     async def buy(self, pool: PoolInfo, amount_sol: float) -> TradeRecord | None:
         """Execute a buy: SOL -> token."""

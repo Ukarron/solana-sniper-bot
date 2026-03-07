@@ -156,10 +156,14 @@ async def process_new_pool(
             wallet_address=trade.wallet_address,
         )
         await db.increment_daily_stat("trades_executed")
+        token_name = pool.token_name or trade.token_symbol
+        dex_link = f"https://dexscreener.com/solana/{trade.token_mint}"
         notifier.alert(
-            f"🟢 <b>BUY</b> {trade.token_symbol}\n"
+            f"🟢 <b>BUY</b> {token_name} (${trade.token_symbol})\n"
             f"Amount: {trade.amount_sol:.3f} SOL\n"
-            f"TX: <code>{trade.tx_signature[:20]}...</code>"
+            f"Mint: <code>{trade.token_mint[:16]}...</code>\n"
+            f'<a href="{dex_link}">DexScreener</a> | '
+            f"TX: <code>{trade.tx_signature[:16]}...</code>"
         )
 
         # КРОК 6: Start position monitoring

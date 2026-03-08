@@ -17,6 +17,7 @@ Pipeline:
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import os
 import signal
@@ -156,10 +157,11 @@ async def process_new_pool(
             wallet_address=trade.wallet_address,
         )
         await db.increment_daily_stat("trades_executed")
-        token_name = pool.token_name or trade.token_symbol
+        token_name = html.escape(pool.token_name or trade.token_symbol or "???")
+        token_sym = html.escape(trade.token_symbol or "???")
         dex_link = f"https://dexscreener.com/solana/{trade.token_mint}"
         notifier.alert(
-            f"🟢 <b>BUY</b> {token_name} (${trade.token_symbol})\n"
+            f"🟢 <b>BUY</b> {token_name} (${token_sym})\n"
             f"Amount: {trade.amount_sol:.3f} SOL\n"
             f"Mint: <code>{trade.token_mint[:16]}...</code>\n"
             f'<a href="{dex_link}">DexScreener</a> | '

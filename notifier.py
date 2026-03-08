@@ -78,7 +78,7 @@ class TelegramNotifier:
             except asyncio.CancelledError:
                 return
             except Exception:
-                log.debug("Telegram send error", exc_info=True)
+                log.warning("Telegram send error", exc_info=True)
 
     async def _send(self, text: str) -> None:
         if not self._session or not self._url:
@@ -94,9 +94,10 @@ class TelegramNotifier:
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as resp:
                 if resp.status != 200:
-                    log.debug("Telegram HTTP %d", resp.status)
+                    body = await resp.text()
+                    log.warning("Telegram HTTP %d: %s", resp.status, body[:200])
         except Exception:
-            log.debug("Telegram send failed", exc_info=True)
+            log.warning("Telegram send failed", exc_info=True)
 
 
 _instance: TelegramNotifier | None = None

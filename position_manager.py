@@ -12,6 +12,7 @@ Combined scheme:
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import time
 
@@ -187,9 +188,10 @@ class PositionManager:
                 await db.increment_daily_stat("losses")
 
             emoji = "💰" if is_win else "🔴"
+            sym = html.escape(pos.token_symbol or "???")
             dex_link = f"https://dexscreener.com/solana/{pos.token_mint}"
             notifier.alert(
-                f"{emoji} <b>{reason.value.upper()}</b> {pos.token_symbol}\n"
+                f"{emoji} <b>{reason.value.upper()}</b> {sym}\n"
                 f"Sold {sell_pct:.0f}% | PnL: {pnl:+.4f} SOL\n"
                 f"Remaining: {pos.remaining_pct:.0f}%\n"
                 f'<a href="{dex_link}">DexScreener</a>'

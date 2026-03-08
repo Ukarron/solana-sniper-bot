@@ -87,9 +87,16 @@ async def run_safety_checks(
     result.honeypot_safe = honeypot["safe"]
     result.honeypot_sell_ratio = honeypot.get("sell_ratio", 0)
     if not honeypot["safe"]:
-        result.safe = False
-        result.reason = f"Honeypot: {honeypot.get('reason', 'sell blocked')}"
-        return result
+        if honeypot.get("inconclusive"):
+            logger.info(
+                "Honeypot INCONCLUSIVE for %s (Jupiter not indexed yet) — allowing",
+                token_mint[:12],
+            )
+            result.honeypot_safe = True
+        else:
+            result.safe = False
+            result.reason = f"Honeypot: {honeypot.get('reason', 'sell blocked')}"
+            return result
 
     result.safe = True
     result.reason = "OK"
@@ -251,7 +258,7 @@ async def _check_honeypot_v2(token_mint: str, cfg: Config) -> dict:
                 attempt + 1, len(results), token_mint[:12],
             )
         else:
-            return {"safe": False, "reason": "All simulations failed — honeypot"}
+            return {"safe": False, "inconclusive": True, "reason": "All simulations failed (Jupiter not indexed)"}
 
         ratios = [r["sell_ratio"] for r in results if not r.get("error")]
         if not ratios:

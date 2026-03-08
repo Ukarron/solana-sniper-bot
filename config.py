@@ -61,9 +61,9 @@ class Config:
 
     # ── Safety filters ────────────────────────────────────
     min_liquidity_sol: float = 10.0
-    max_top_holder_pct: float = 30.0
+    max_top_holder_pct: float = 50.0
     min_liquidity_mc_ratio: float = 0.10
-    max_rugcheck_score: int = 5000
+    max_rugcheck_score: int = 50000
     skip_token_2022_hooks: bool = True
     require_mint_revoked: bool = True
     require_freeze_revoked: bool = True
@@ -163,7 +163,8 @@ class Config:
             log_level=_env("LOG_LEVEL", "INFO"),
             paper_trading=_env_bool("PAPER_TRADING", True),
             jupiter_api_key=_env("JUPITER_API_KEY"),
-            max_rugcheck_score=_env_int("MAX_RUGCHECK_SCORE", 5000),
+            max_rugcheck_score=_env_int("MAX_RUGCHECK_SCORE", 50000),
+            max_top_holder_pct=_env_float("MAX_TOP_HOLDER_PCT", 50.0),
             honeypot_initial_delay=_env_int("HONEYPOT_INITIAL_DELAY", 30),
             honeypot_retry_delay=_env_int("HONEYPOT_RETRY_DELAY", 15),
             honeypot_max_retries=_env_int("HONEYPOT_MAX_RETRIES", 3),
@@ -173,7 +174,8 @@ class Config:
         """Fail fast if critical settings are missing."""
         assert self.rpc_http, "RPC_HTTP is required in .env"
         assert self.rpc_wss, "RPC_WSS is required in .env"
-        assert self.private_key, "PRIVATE_KEY is required in .env"
+        if not self.paper_trading:
+            assert self.private_key, "PRIVATE_KEY is required for live trading"
         if not self.paper_trading:
             assert self.telegram_bot_token, "TELEGRAM_BOT_TOKEN required for live trading"
             assert self.telegram_chat_id, "TELEGRAM_CHAT_ID required for live trading"

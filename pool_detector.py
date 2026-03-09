@@ -17,12 +17,14 @@ import aiohttp
 from websockets import connect
 from websockets.exceptions import ConnectionClosed
 
+from collections import OrderedDict
+
 from config import Config
 from models import PoolInfo, PoolSource
 
 logger = logging.getLogger(__name__)
 
-_seen_sigs: set[str] = set()
+_seen_sigs: OrderedDict[str, None] = OrderedDict()
 _MAX_SEEN = 5000
 
 
@@ -116,6 +118,10 @@ async def _ws_listener(
                     if sig in _seen_sigs:
                         continue
 
+                    _seen_sigs[sig] = None
+                    while len(_seen_sigs) > _MAX_SEEN:
+                        _seen_sigs.popitem(last=False)
+
                     logs_text = "\n".join(logs)
 
                     is_pumpswap = (
@@ -131,10 +137,6 @@ async def _ws_listener(
 
                     if not is_pumpswap and not is_raydium:
                         continue
-
-                    _seen_sigs.add(sig)
-                    if len(_seen_sigs) > _MAX_SEEN:
-                        _seen_sigs.clear()
 
                     match_count += 1
                     source = PoolSource.PUMPSWAP if is_pumpswap else PoolSource.RAYDIUM

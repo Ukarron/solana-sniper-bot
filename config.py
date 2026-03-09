@@ -56,6 +56,9 @@ class Config:
     rpc_wss: str = ""
     helius_api_key: str = ""
 
+    # ── Limits ─────────────────────────────────────────────
+    max_concurrent_positions: int = 5
+
     # ── Wallet ────────────────────────────────────────────
     private_key: str = ""
 
@@ -70,9 +73,9 @@ class Config:
     require_lp_locked: bool = True
 
     # ── Honeypot check timing ──────────────────────────────
-    honeypot_initial_delay: int = 30
-    honeypot_retry_delay: int = 15
-    honeypot_max_retries: int = 3
+    honeypot_initial_delay: int = 10
+    honeypot_retry_delay: int = 10
+    honeypot_max_retries: int = 2
 
     # ── Creator analysis ──────────────────────────────────
     min_deployer_age_days: int = 0
@@ -116,7 +119,7 @@ class Config:
     max_single_trade_pct: float = 2.0
     max_total_exposure_pct: float = 30.0
     min_ev_threshold: float = 0.0
-    estimated_win_rate: float = 0.25
+    estimated_win_rate: float = 0.35
 
     # ── Macro filter ──────────────────────────────────────
     macro_check_interval_sec: int = 3600
@@ -149,25 +152,47 @@ class Config:
     @classmethod
     def from_env(cls) -> Config:
         return cls(
+            # RPC & keys
             rpc_http=_env("RPC_HTTP"),
             rpc_wss=_env("RPC_WSS"),
             helius_api_key=_env("HELIUS_API_KEY"),
             private_key=_env("PRIVATE_KEY"),
             telegram_bot_token=_env("TELEGRAM_BOT_TOKEN"),
             telegram_chat_id=_env("TELEGRAM_CHAT_ID"),
-            buy_amount_sol=_env_float("BUY_AMOUNT_SOL", 0.5),
-            max_slippage_bps=_env_int("MAX_SLIPPAGE_BPS", 500),
-            jito_tip_lamports=_env_int("JITO_TIP_LAMPORTS", 100_000),
-            min_liquidity_sol=_env_float("MIN_LIQUIDITY_SOL", 10.0),
-            stop_loss_pct=_env_float("STOP_LOSS_PCT", 20.0),
+            jupiter_api_key=_env("JUPITER_API_KEY"),
             log_level=_env("LOG_LEVEL", "INFO"),
             paper_trading=_env_bool("PAPER_TRADING", True),
-            jupiter_api_key=_env("JUPITER_API_KEY"),
+            # Trading
+            buy_amount_sol=_env_float("BUY_AMOUNT_SOL", 0.1),
+            max_slippage_bps=_env_int("MAX_SLIPPAGE_BPS", 300),
+            jito_tip_lamports=_env_int("JITO_TIP_LAMPORTS", 100_000),
+            # Safety filters
+            min_liquidity_sol=_env_float("MIN_LIQUIDITY_SOL", 10.0),
             max_rugcheck_score=_env_int("MAX_RUGCHECK_SCORE", 50000),
             max_top_holder_pct=_env_float("MAX_TOP_HOLDER_PCT", 50.0),
-            honeypot_initial_delay=_env_int("HONEYPOT_INITIAL_DELAY", 30),
-            honeypot_retry_delay=_env_int("HONEYPOT_RETRY_DELAY", 15),
-            honeypot_max_retries=_env_int("HONEYPOT_MAX_RETRIES", 3),
+            honeypot_initial_delay=_env_int("HONEYPOT_INITIAL_DELAY", 10),
+            honeypot_retry_delay=_env_int("HONEYPOT_RETRY_DELAY", 10),
+            honeypot_max_retries=_env_int("HONEYPOT_MAX_RETRIES", 2),
+            # Early activity
+            wait_before_analysis_sec=_env_int("WAIT_BEFORE_ANALYSIS_SEC", 15),
+            min_unique_buyers=_env_int("MIN_UNIQUE_BUYERS", 3),
+            max_single_buyer_pct=_env_float("MAX_SINGLE_BUYER_PCT", 50.0),
+            # TP / SL
+            stop_loss_pct=_env_float("STOP_LOSS_PCT", 35.0),
+            tp1_trigger=_env_float("TP1_TRIGGER", 2.0),
+            tp1_trailing_pct=_env_float("TP1_TRAILING_PCT", 20.0),
+            tp1_sell_pct=_env_float("TP1_SELL_PCT", 40.0),
+            tp2_trigger=_env_float("TP2_TRIGGER", 4.0),
+            tp2_trailing_pct=_env_float("TP2_TRAILING_PCT", 25.0),
+            tp2_sell_pct=_env_float("TP2_SELL_PCT", 30.0),
+            trailing_stop_activation=_env_float("TRAILING_STOP_ACTIVATION", 1.8),
+            trailing_stop_pct=_env_float("TRAILING_STOP_PCT", 30.0),
+            max_hold_time_hours=_env_int("MAX_HOLD_TIME_HOURS", 12),
+            # Risk management
+            max_concurrent_positions=_env_int("MAX_CONCURRENT_POSITIONS", 5),
+            estimated_win_rate=_env_float("ESTIMATED_WIN_RATE", 0.35),
+            # Misc
+            price_check_interval_sec=_env_int("PRICE_CHECK_INTERVAL_SEC", 5),
         )
 
     def validate(self) -> None:
@@ -176,6 +201,11 @@ class Config:
         assert self.rpc_wss, "RPC_WSS is required in .env"
         if not self.paper_trading:
             assert self.private_key, "PRIVATE_KEY is required for live trading"
-        if not self.paper_trading:
             assert self.telegram_bot_token, "TELEGRAM_BOT_TOKEN required for live trading"
             assert self.telegram_chat_id, "TELEGRAM_CHAT_ID required for live trading"
+        total_sell = self.tp1_sell_pct + self.tp2_sell_pct + self.remaining_pct
+        if abs(total_sell - 100.0) > 0.1:
+            log.warning(
+                "TP sell percentages don't sum to 100: %.1f + %.1f + %.1f = %.1f",
+                self.tp1_sell_pct, self.tp2_sell_pct, self.remaining_pct, total_sell,
+            )

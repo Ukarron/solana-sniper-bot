@@ -157,11 +157,14 @@ class TradeExecutor:
         sol_out = int(quote.get("outAmount", 0))
         sol_amount = sol_out / 1_000_000_000
 
+        price_per_token = sol_amount / token_amount if token_amount > 0 else 0
+
         trade = TradeRecord(
             token_mint=token_mint,
             side="SELL",
             amount_sol=sol_amount,
             token_amount=token_amount,
+            price_per_token=price_per_token,
             wallet_address=wallet_pubkey,
         )
 

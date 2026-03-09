@@ -1,12 +1,8 @@
 """
-КРОК 6: Position Manager — trailing TP/SL, LP drain detection, emergency exit.
+КРОК 6: Position Manager — trailing TP/SL, timing honeypot detection, emergency exit.
 
-Combined scheme:
-  1. Fixed stop-loss: -20% from entry (always active, emergency floor)
-  2. Trailing stop: activates at +50%, 25% from maximum
-  3. Trailing TP1: trigger at 2x, trail 15%, sell 50%
-  4. Trailing TP2: trigger at 5x, trail 20%, sell 25%
-  5. Moon bag: 25% held until trailing stop or fixed stop
+All thresholds configurable via Config / .env.
+Sell percentages are relative to the ORIGINAL position size.
 """
 
 from __future__ import annotations
@@ -22,26 +18,29 @@ from trade_executor import TradeExecutor
 from safety_filter import recheck_honeypot_after_buy
 from database import get_db
 from notifier import get_notifier
-from api_clients.jupiter import JupiterClient
 
 logger = logging.getLogger(__name__)
 
 
 class PositionManager:
-    def __init__(self, cfg: Config, executor: TradeExecutor) -> None:
+    def __init__(self, cfg: Config, executor: TradeExecutor, ev_calc=None) -> None:
         self.cfg = cfg
         self.executor = executor
+        self._ev_calc = ev_calc
         self._positions: dict[int, _TrackedPosition] = {}
-        self._jupiter = JupiterClient(
-            api_key=cfg.jupiter_api_key,
-            quote_url=cfg.jupiter_quote_url,
-            swap_url=cfg.jupiter_swap_url,
-        )
 
-    async def track_position(self, pos_id: int, trade: TradeRecord) -> None:
+    @property
+    def open_position_count(self) -> int:
+        return len(self._positions)
+
+    def has_token(self, token_mint: str) -> bool:
+        return any(p.token_mint == token_mint for p in self._positions.values())
+
+    async def track_position(self, pos_id: int, trade: TradeRecord, pool_id: int = 0) -> None:
         """Start tracking a new position after buy."""
         self._positions[pos_id] = _TrackedPosition(
             pos_id=pos_id,
+            pool_id=pool_id,
             token_mint=trade.token_mint,
             token_symbol=trade.token_symbol,
             entry_price=trade.price_per_token,
@@ -80,28 +79,29 @@ class PositionManager:
         if current_sol > pos.max_sol_value:
             pos.max_sol_value = current_sol
 
-        multiplier = current_sol / pos.entry_amount_sol if pos.entry_amount_sol > 0 else 0
+        # Normalize multiplier to remaining portion so partial sells don't distort it
+        proportional_entry = pos.entry_amount_sol * (pos.remaining_pct / 100)
+        multiplier = current_sol / proportional_entry if proportional_entry > 0 else 0
         logger.debug(
             "POS %s: %.4f SOL (%.2fx) max=%.4f remaining=%.0f%%",
             pos.token_mint[:12], current_sol, multiplier, pos.max_sol_value, pos.remaining_pct,
         )
         db = get_db()
-        notifier = get_notifier()
 
         # --- Fixed stop-loss (always active) ---
         loss_pct = (1 - multiplier) * 100
         if loss_pct >= self.cfg.stop_loss_pct:
-            await self._execute_sell(pos, 100, ExitReason.STOP_LOSS)
+            await self._execute_sell(pos, pos.remaining_pct, ExitReason.STOP_LOSS)
             return
 
-        # --- Trailing stop (activates after +50%) ---
+        # --- Trailing stop (activates after threshold) ---
         if multiplier >= self.cfg.trailing_stop_activation:
             trailing_floor = pos.max_sol_value * (1 - self.cfg.trailing_stop_pct / 100)
             if current_sol <= trailing_floor:
                 await self._execute_sell(pos, pos.remaining_pct, ExitReason.TRAILING_STOP)
                 return
 
-        # --- Trailing TP1 (trigger at 2x) ---
+        # --- Trailing TP1 ---
         if not pos.tp1_sold and multiplier >= self.cfg.tp1_trigger:
             if not pos.tp1_triggered:
                 pos.tp1_triggered = True
@@ -116,7 +116,7 @@ class PositionManager:
                     await self._execute_sell(pos, self.cfg.tp1_sell_pct, ExitReason.TP1)
                     pos.tp1_sold = True
 
-        # --- Trailing TP2 (trigger at 5x) ---
+        # --- Trailing TP2 ---
         if not pos.tp2_sold and multiplier >= self.cfg.tp2_trigger:
             if not pos.tp2_triggered:
                 pos.tp2_triggered = True
@@ -143,8 +143,9 @@ class PositionManager:
     async def _execute_sell(
         self, pos: _TrackedPosition, sell_pct: float, reason: ExitReason
     ) -> None:
-        """Sell a percentage of the position."""
-        sell_tokens = int(pos.token_amount * (sell_pct / 100) * (pos.remaining_pct / 100))
+        """Sell a percentage of the ORIGINAL position (not remaining)."""
+        # sell_pct is always relative to the original total position
+        sell_tokens = int(pos.token_amount * (sell_pct / 100))
         if sell_tokens <= 0:
             return
 
@@ -156,16 +157,21 @@ class PositionManager:
         )
 
         if trade and trade.tx_signature:
+            old_remaining = pos.remaining_pct
             pos.remaining_pct -= sell_pct
             if pos.remaining_pct <= 0:
                 pos.remaining_pct = 0
+
+            # Adjust max_sol_value proportionally so trailing stops don't false-trigger
+            if pos.remaining_pct > 0 and old_remaining > 0:
+                pos.max_sol_value = pos.max_sol_value * (pos.remaining_pct / old_remaining)
 
             pnl = trade.amount_sol - (pos.entry_amount_sol * sell_pct / 100)
             pos.total_pnl += pnl
             is_win = pnl > 0
 
             await db.save_trade(
-                pool_id=0,
+                pool_id=pos.pool_id,
                 token_mint=trade.token_mint,
                 token_symbol=pos.token_symbol,
                 side=trade.side,
@@ -185,10 +191,14 @@ class PositionManager:
                 closed_at=time.time() if status == "closed" else None,
             )
 
-            if is_win:
-                await db.increment_daily_stat("wins")
-            else:
-                await db.increment_daily_stat("losses")
+            await db.increment_daily_stat("net_pnl_sol", pnl)
+
+            # Only count win/loss once when position fully closes
+            if pos.remaining_pct <= 0:
+                if pos.total_pnl > 0:
+                    await db.increment_daily_stat("wins")
+                else:
+                    await db.increment_daily_stat("losses")
 
             emoji = "💰" if is_win else "🔴"
             sym = html.escape(pos.token_symbol or "???")
@@ -202,6 +212,11 @@ class PositionManager:
 
             if pos.remaining_pct <= 0:
                 self._positions.pop(pos.pos_id, None)
+                if self._ev_calc:
+                    try:
+                        await self._ev_calc.update_from_db()
+                    except Exception:
+                        pass
 
             logger.info(
                 "%s %s: sold %.0f%% pnl=%+.4f SOL remaining=%.0f%%",
@@ -228,7 +243,7 @@ class PositionManager:
         if remaining_tokens <= 0:
             return None
         try:
-            quote = await self._jupiter.get_quote(
+            quote = await self.executor.jupiter.get_quote(
                 pos.token_mint,
                 self.cfg.SOL_MINT,
                 remaining_tokens,
@@ -249,6 +264,7 @@ class _TrackedPosition:
     def __init__(
         self,
         pos_id: int,
+        pool_id: int,
         token_mint: str,
         token_symbol: str,
         entry_price: float,
@@ -259,6 +275,7 @@ class _TrackedPosition:
         max_price: float = 0.0,
     ) -> None:
         self.pos_id = pos_id
+        self.pool_id = pool_id
         self.token_mint = token_mint
         self.token_symbol = token_symbol
         self.entry_price = entry_price

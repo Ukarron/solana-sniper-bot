@@ -21,7 +21,6 @@ import html
 import logging
 import os
 import signal
-import sys
 
 from datetime import datetime, timedelta
 
@@ -63,6 +62,20 @@ async def process_new_pool(
     notifier = get_notifier()
     flog = FilterLog(pool=pool)
 
+    # Check max concurrent positions
+    open_count = pos_mgr.open_position_count
+    if open_count >= cfg.max_concurrent_positions:
+        logger.info(
+            "SKIP [capacity] %s: %d/%d positions open",
+            pool.token_mint[:12], open_count, cfg.max_concurrent_positions,
+        )
+        return
+
+    # Prevent buying same token twice
+    if pos_mgr.has_token(pool.token_mint):
+        logger.info("SKIP [duplicate] %s: already holding this token", pool.token_mint[:12])
+        return
+
     with Timer() as timer:
         # Save detection
         pool_id = await db.save_detected_pool(
@@ -88,8 +101,15 @@ async def process_new_pool(
             await _save_filter_result(db, pool_id, flog, timer)
             return
 
-        # КРОК 2: Safety filter
-        safety = await run_safety_checks(pool.token_mint, pool.pool_address, cfg)
+        # КРОК 2 + 2.5 + 3: Safety / Creator / Legitimacy in parallel
+        safety_coro = run_safety_checks(pool.token_mint, pool.pool_address, cfg)
+        creator_coro = analyze_creator(pool.token_mint, cfg)
+        legitimacy_coro = calculate_legitimacy_score(pool.token_mint, cfg)
+
+        safety, creator, legitimacy = await asyncio.gather(
+            safety_coro, creator_coro, legitimacy_coro
+        )
+
         flog.safety = safety
         if not safety.safe:
             flog.skip_reason = f"safety: {safety.reason}"
@@ -97,8 +117,6 @@ async def process_new_pool(
             await _save_filter_result(db, pool_id, flog, timer)
             return
 
-        # КРОК 2.5: Creator analysis
-        creator = await analyze_creator(pool.token_mint, cfg)
         flog.creator = creator
         if creator.is_blacklisted or creator.score < 0:
             flog.skip_reason = f"creator: {creator.reason}"
@@ -106,8 +124,6 @@ async def process_new_pool(
             await _save_filter_result(db, pool_id, flog, timer)
             return
 
-        # КРОК 3: Legitimacy filter
-        legitimacy = await calculate_legitimacy_score(pool.token_mint, cfg)
         flog.legitimacy = legitimacy
         if legitimacy.score < cfg.min_legitimacy_score:
             flog.skip_reason = f"legitimacy: score {legitimacy.score} < {cfg.min_legitimacy_score}"
@@ -151,33 +167,27 @@ async def process_new_pool(
 
     # КРОК 4.7: Momentum check — verify price is not dumping
     try:
-        from api_clients.jupiter import JupiterClient
-        jup = JupiterClient(
-            api_key=cfg.jupiter_api_key,
-            quote_url=cfg.jupiter_quote_url,
-            swap_url=cfg.jupiter_swap_url,
-        )
+        jup = executor.jupiter
         test_amount = 100_000_000  # 0.1 SOL
         q1 = await jup.get_quote(cfg.SOL_MINT, pool.token_mint, test_amount, cfg.max_slippage_bps)
         tokens_t1 = int(q1["outAmount"]) if q1 and q1.get("outAmount") else 0
         if tokens_t1 > 0:
-            await asyncio.sleep(5)
+            await asyncio.sleep(3)
             q2 = await jup.get_quote(cfg.SOL_MINT, pool.token_mint, test_amount, cfg.max_slippage_bps)
             tokens_t2 = int(q2["outAmount"]) if q2 and q2.get("outAmount") else 0
             if tokens_t2 > 0:
+                # More tokens for same SOL = price dropped
                 price_change = (tokens_t1 - tokens_t2) / tokens_t1
                 if price_change < -0.10:
                     logger.info(
                         "SKIP [momentum] %s: price dropping %.1f%%",
                         pool.token_mint[:12], price_change * 100,
                     )
-                    await jup.close()
                     return
                 logger.info(
-                    "Momentum OK for %s: %.1f%% change",
+                    "Momentum OK for %s: %.1f%% price change",
                     pool.token_mint[:12], price_change * 100,
                 )
-        await jup.close()
     except Exception as e:
         logger.debug("Momentum check error: %s", e)
 
@@ -221,7 +231,7 @@ async def process_new_pool(
             status="open",
             opened_at=trade.executed_at,
         )
-        await pos_mgr.track_position(pos_id, trade)
+        await pos_mgr.track_position(pos_id, trade, pool_id=pool_id)
 
 
 async def _save_filter_result(db, pool_id: int, flog: FilterLog, timer: Timer) -> None:
@@ -306,7 +316,7 @@ async def run_bot() -> None:
         avg_loss_pct=cfg.stop_loss_pct,
     )
     executor = TradeExecutor(cfg)
-    pos_mgr = PositionManager(cfg, executor)
+    pos_mgr = PositionManager(cfg, executor, ev_calc)
 
     # Shutdown coordination
     shutdown_event = asyncio.Event()
@@ -366,6 +376,7 @@ async def run_bot() -> None:
         except (asyncio.CancelledError, Exception):
             pass
 
+    await executor.close()
     await notifier.stop()
     await db.close()
     logger.info("Bot stopped")

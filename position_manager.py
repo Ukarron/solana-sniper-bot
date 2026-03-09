@@ -114,6 +114,7 @@ class PositionManager:
                 tp1_sell_level = pos.tp1_max_sol * (1 - self.cfg.tp1_trailing_pct / 100)
                 if current_sol <= tp1_sell_level:
                     await self._execute_sell(pos, self.cfg.tp1_sell_pct, ExitReason.TP1)
+                    pos.tp1_sold = True
 
         # --- Trailing TP2 (trigger at 5x) ---
         if not pos.tp2_sold and multiplier >= self.cfg.tp2_trigger:
@@ -128,6 +129,7 @@ class PositionManager:
                 tp2_sell_level = pos.tp2_max_sol * (1 - self.cfg.tp2_trailing_pct / 100)
                 if current_sol <= tp2_sell_level:
                     await self._execute_sell(pos, self.cfg.tp2_sell_pct, ExitReason.TP2)
+                    pos.tp2_sold = True
 
         # --- Max hold time ---
         hold_hours = (time.time() - pos.opened_at) / 3600
@@ -159,6 +161,7 @@ class PositionManager:
                 pos.remaining_pct = 0
 
             pnl = trade.amount_sol - (pos.entry_amount_sol * sell_pct / 100)
+            pos.total_pnl += pnl
             is_win = pnl > 0
 
             await db.save_trade(
@@ -178,7 +181,7 @@ class PositionManager:
                 remaining_pct=pos.remaining_pct,
                 status=status,
                 exit_reason=reason.value,
-                pnl_sol=pnl,
+                pnl_sol=pos.total_pnl,
                 closed_at=time.time() if status == "closed" else None,
             )
 
@@ -265,6 +268,8 @@ class _TrackedPosition:
         self.remaining_pct = remaining_pct
         self.max_sol_value = entry_amount_sol
         self.opened_at = time.time()
+
+        self.total_pnl = 0.0
 
         # Trailing TP state (tracked in SOL value)
         self.tp1_triggered = False

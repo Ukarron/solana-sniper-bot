@@ -116,18 +116,27 @@ async def _find_deployer(
 
 
 async def _check_deployer_age(deployer: str, rpc: SolanaRPC) -> int:
-    """Estimate deployer wallet age in days from first transaction."""
+    """Estimate deployer wallet age in days by paginating to the oldest tx."""
     try:
-        sigs = await rpc.get_signatures_for_address(deployer, limit=1)
-        if not sigs:
-            return 0
-        # Last in list = oldest (API returns newest first by default)
-        # With limit=1, we only get the most recent — for full age we'd need
-        # to paginate backwards. Use blockTime as an approximation.
-        oldest = sigs[-1]
-        block_time = oldest.get("blockTime", 0)
-        if block_time:
-            age_sec = time.time() - block_time
+        before = None
+        oldest_time = 0
+        for _ in range(10):
+            params = [deployer, {"limit": 1000}]
+            if before:
+                params[1]["before"] = before
+            sigs = await rpc._call("getSignaturesForAddress", params)
+            if not sigs:
+                break
+            last = sigs[-1]
+            bt = last.get("blockTime", 0)
+            if bt:
+                oldest_time = bt
+            if len(sigs) < 1000:
+                break
+            before = last.get("signature")
+
+        if oldest_time:
+            age_sec = time.time() - oldest_time
             return max(0, int(age_sec / 86400))
     except Exception as e:
         logger.debug("Deployer age check failed: %s", e)

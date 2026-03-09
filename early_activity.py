@@ -33,8 +33,9 @@ async def analyze_early_activity(
         # Get recent transactions for the pool
         txs = await helius.get_transactions(pool_address, limit=20)
 
-        # Extract unique buyers (fee payers who aren't the pool creator)
+        # Extract buyers and sellers
         buyers: set[str] = set()
+        sellers: set[str] = set()
         buy_amounts: list[float] = []
 
         for tx in txs:
@@ -42,21 +43,22 @@ async def analyze_early_activity(
             if not fee_payer:
                 continue
 
-            # Check if this is a buy (swap SOL -> token)
             token_transfers = tx.get("tokenTransfers", [])
             native_transfers = tx.get("nativeTransfers", [])
 
-            is_buy = False
             sol_spent = 0.0
+            sol_received = 0.0
             for nt in native_transfers:
                 if nt.get("fromUserAccount") == fee_payer:
                     sol_spent += (nt.get("amount", 0) / 1_000_000_000)
-                    is_buy = True
+                if nt.get("toUserAccount") == fee_payer:
+                    sol_received += (nt.get("amount", 0) / 1_000_000_000)
 
-            if is_buy and fee_payer:
+            if sol_spent > sol_received and fee_payer:
                 buyers.add(fee_payer)
-                if sol_spent > 0:
-                    buy_amounts.append(sol_spent)
+                buy_amounts.append(sol_spent - sol_received)
+            elif sol_received > sol_spent and fee_payer:
+                sellers.add(fee_payer)
 
         result.unique_buyers = len(buyers)
 
@@ -64,6 +66,13 @@ async def analyze_early_activity(
         if result.unique_buyers < cfg.min_unique_buyers:
             result.reason = (
                 f"Only {result.unique_buyers} unique buyers < {cfg.min_unique_buyers}"
+            )
+            return result
+
+        # Check for early sells (bearish signal)
+        if sellers and len(sellers) >= len(buyers):
+            result.reason = (
+                f"Too many early sellers: {len(sellers)} sellers vs {len(buyers)} buyers"
             )
             return result
 

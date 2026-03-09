@@ -215,10 +215,40 @@ async def _resolve_and_dispatch(
 
     pool = _parse_full_transaction(tx_data, sig, source, cfg)
     if pool:
+        # Fetch token metadata
+        try:
+            from api_clients.helius import HeliusClient
+            helius = HeliusClient(cfg.helius_api_key, cfg.rpc_http)
+            asset = await helius.get_asset(pool.token_mint)
+            if asset:
+                content = asset.get("content", {})
+                metadata = content.get("metadata", {})
+                pool.token_symbol = metadata.get("symbol", "")
+                pool.token_name = metadata.get("name", "")
+            await helius.close()
+        except Exception:
+            logger.debug("Failed to fetch token metadata for %s", pool.token_mint[:12])
+
+        # Extract initial liquidity from postTokenBalances
+        try:
+            sol_balances = [
+                b for b in tx_data.get("meta", {}).get("postTokenBalances", [])
+                if b.get("mint") == cfg.SOL_MINT
+            ]
+            if sol_balances:
+                liq_raw = sol_balances[0].get("uiTokenAmount", {}).get("uiAmount", 0)
+                pool.initial_liquidity_sol = float(liq_raw) if liq_raw else 0
+        except Exception:
+            pass
+
         logger.info(
-            "NEW POOL [%s]: mint=%s pool=%s",
-            pool.source.value, pool.token_mint[:16],
+            "NEW POOL [%s]: %s (%s) mint=%s pool=%s liq=%.1f SOL",
+            pool.source.value,
+            pool.token_name or "?",
+            pool.token_symbol or "?",
+            pool.token_mint[:16],
             pool.pool_address[:16] if pool.pool_address else "?",
+            pool.initial_liquidity_sol,
         )
         await on_new_pool(pool)
     else:

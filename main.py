@@ -78,6 +78,16 @@ async def process_new_pool(
         )
         await db.increment_daily_stat("pools_detected")
 
+        # КРОК 1.5: Minimum liquidity check
+        if pool.initial_liquidity_sol > 0 and pool.initial_liquidity_sol < cfg.min_liquidity_sol:
+            flog.skip_reason = f"liquidity: {pool.initial_liquidity_sol:.1f} < {cfg.min_liquidity_sol} SOL"
+            logger.info(
+                "SKIP [liquidity] %s: %.1f SOL < %.1f SOL min",
+                pool.token_mint[:12], pool.initial_liquidity_sol, cfg.min_liquidity_sol,
+            )
+            await _save_filter_result(db, pool_id, flog, timer)
+            return
+
         # КРОК 2: Safety filter
         safety = await run_safety_checks(pool.token_mint, pool.pool_address, cfg)
         flog.safety = safety

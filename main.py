@@ -139,6 +139,38 @@ async def process_new_pool(
         pool.token_symbol or pool.token_mint[:12], pool.source.value, timer.elapsed_ms,
     )
 
+    # КРОК 4.7: Momentum check — verify price is not dumping
+    try:
+        from api_clients.jupiter import JupiterClient
+        jup = JupiterClient(
+            api_key=cfg.jupiter_api_key,
+            quote_url=cfg.jupiter_quote_url,
+            swap_url=cfg.jupiter_swap_url,
+        )
+        test_amount = 100_000_000  # 0.1 SOL
+        q1 = await jup.get_quote(cfg.SOL_MINT, pool.token_mint, test_amount, cfg.max_slippage_bps)
+        tokens_t1 = int(q1["outAmount"]) if q1 and q1.get("outAmount") else 0
+        if tokens_t1 > 0:
+            await asyncio.sleep(5)
+            q2 = await jup.get_quote(cfg.SOL_MINT, pool.token_mint, test_amount, cfg.max_slippage_bps)
+            tokens_t2 = int(q2["outAmount"]) if q2 and q2.get("outAmount") else 0
+            if tokens_t2 > 0:
+                price_change = (tokens_t1 - tokens_t2) / tokens_t1
+                if price_change < -0.10:
+                    logger.info(
+                        "SKIP [momentum] %s: price dropping %.1f%%",
+                        pool.token_mint[:12], price_change * 100,
+                    )
+                    await jup.close()
+                    return
+                logger.info(
+                    "Momentum OK for %s: %.1f%% change",
+                    pool.token_mint[:12], price_change * 100,
+                )
+        await jup.close()
+    except Exception as e:
+        logger.debug("Momentum check error: %s", e)
+
     # КРОК 5: Execute trade
     buy_amount = cfg.buy_amount_sol * flog.macro_multiplier
     trade = await executor.buy(pool, buy_amount)

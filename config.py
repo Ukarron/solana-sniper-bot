@@ -84,13 +84,13 @@ class Config:
     website_check_timeout_sec: int = 5
 
     # ── Early activity filter ─────────────────────────────
-    wait_before_analysis_sec: int = 5
-    min_unique_buyers: int = 5
-    max_single_buyer_pct: float = 40.0
+    wait_before_analysis_sec: int = 15
+    min_unique_buyers: int = 3
+    max_single_buyer_pct: float = 50.0
 
     # ── Trading ───────────────────────────────────────────
-    buy_amount_sol: float = 0.5
-    max_slippage_bps: int = 500
+    buy_amount_sol: float = 0.1
+    max_slippage_bps: int = 300
     jito_tip_lamports: int = 100_000
     tx_timeout_sec: int = 30
     tx_retries: int = 3
@@ -98,19 +98,19 @@ class Config:
 
     # ── Take-profits (trailing) ───────────────────────────
     tp1_trigger: float = 2.0
-    tp1_trailing_pct: float = 15.0
-    tp1_sell_pct: float = 50.0
-    tp2_trigger: float = 5.0
-    tp2_trailing_pct: float = 20.0
-    tp2_sell_pct: float = 25.0
-    remaining_pct: float = 25.0
+    tp1_trailing_pct: float = 20.0
+    tp1_sell_pct: float = 40.0
+    tp2_trigger: float = 4.0
+    tp2_trailing_pct: float = 25.0
+    tp2_sell_pct: float = 30.0
+    remaining_pct: float = 30.0
 
     # ── Stop-losses (trailing) ────────────────────────────
-    stop_loss_pct: float = 20.0
-    trailing_stop_activation: float = 1.5
-    trailing_stop_pct: float = 25.0
+    stop_loss_pct: float = 35.0
+    trailing_stop_activation: float = 1.8
+    trailing_stop_pct: float = 30.0
     emergency_lp_drop_pct: float = 25.0
-    max_hold_time_hours: int = 24
+    max_hold_time_hours: int = 12
 
     # ── Risk management ───────────────────────────────────
     max_single_trade_pct: float = 2.0
@@ -129,7 +129,7 @@ class Config:
     telegram_chat_id: str = ""
 
     # ── Misc ──────────────────────────────────────────────
-    price_check_interval_sec: int = 10
+    price_check_interval_sec: int = 5
     log_level: str = "INFO"
     paper_trading: bool = True
 

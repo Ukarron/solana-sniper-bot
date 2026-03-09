@@ -121,12 +121,24 @@ async def process_new_pool(
         legitimacy_coro = calculate_legitimacy_score(pool.token_mint, cfg)
 
         try:
-            safety, creator, legitimacy = await asyncio.gather(
-                safety_coro, creator_coro, legitimacy_coro
+            results = await asyncio.gather(
+                safety_coro, creator_coro, legitimacy_coro,
+                return_exceptions=True,
             )
+            for i, r in enumerate(results):
+                if isinstance(r, Exception):
+                    names = ["safety", "creator", "legitimacy"]
+                    # #region agent log
+                    _dbg("main.py:gather", "gather_exception_killed_pipeline", {"hypothesisId":"H-A","token":pool.token_mint[:12],"error":str(r),"error_type":type(r).__name__,"filter":names[i]})
+                    # #endregion
+                    logger.warning("Filter %s failed for %s: %s", names[i], pool.token_mint[:12], r)
+                    flog.skip_reason = f"{names[i]} exception: {r}"
+                    await _save_filter_result(db, pool_id, flog, timer)
+                    return
+            safety, creator, legitimacy = results
         except Exception as _gather_err:
             # #region agent log
-            _dbg("main.py:gather", "gather_exception_killed_pipeline", {"hypothesisId":"H-A","token":pool.token_mint[:12],"error":str(_gather_err),"error_type":type(_gather_err).__name__})
+            _dbg("main.py:gather", "gather_exception_killed_pipeline", {"hypothesisId":"H-A","token":pool.token_mint[:12],"error":str(_gather_err),"error_type":type(_gather_err).__name__,"filter":"unknown"})
             # #endregion
             raise
 

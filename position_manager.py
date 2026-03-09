@@ -80,9 +80,15 @@ class PositionManager:
 
     async def _check_position(self, pos: _TrackedPosition) -> None:
         """Run all checks on a single position."""
+        # Max hold time check runs FIRST — even if Jupiter can't quote
+        hold_hours = (time.time() - pos.opened_at) / 3600
+        if hold_hours >= self.cfg.max_hold_time_hours:
+            logger.info("Max hold time reached for %s (no quote needed)", pos.token_symbol)
+            await self._execute_sell(pos, pos.remaining_pct, ExitReason.MAX_HOLD_TIME)
+            return
+
         current_sol = await self._get_position_sol_value(pos)
         # #region agent log
-        hold_hours = (time.time() - pos.opened_at) / 3600
         _dbg("position_manager.py:_check_position", "value_check", {"hypothesisId":"H-B","token":pos.token_mint[:12],"current_sol":current_sol,"remaining_pct":pos.remaining_pct,"hold_hours":round(hold_hours,2),"max_hold":self.cfg.max_hold_time_hours})
         # #endregion
         if current_sol is None or current_sol <= 0:
@@ -160,12 +166,6 @@ class PositionManager:
                     _dbg("position_manager.py:tp2_sell", "tp2_sell_result", {"hypothesisId":"H-D","token":pos.token_mint[:12],"sell_succeeded":sell_succeeded2,"remaining_before":old_remaining2,"remaining_after":pos.remaining_pct})
                     # #endregion
                     pos.tp2_sold = True
-
-        # --- Max hold time ---
-        hold_hours = (time.time() - pos.opened_at) / 3600
-        if hold_hours >= self.cfg.max_hold_time_hours:
-            logger.info("Max hold time reached for %s", pos.token_symbol)
-            await self._execute_sell(pos, pos.remaining_pct, ExitReason.MAX_HOLD_TIME)
 
         # Update DB
         await db.update_position(pos.pos_id, max_price_seen=pos.max_sol_value)

@@ -124,7 +124,7 @@ class PositionManager:
                 return
 
         # --- Trailing TP1 ---
-        if not pos.tp1_sold and multiplier >= self.cfg.tp1_trigger:
+        if not pos.tp1_sold and (pos.tp1_triggered or multiplier >= self.cfg.tp1_trigger):
             if not pos.tp1_triggered:
                 pos.tp1_triggered = True
                 pos.tp1_max_sol = current_sol
@@ -143,10 +143,11 @@ class PositionManager:
                     sell_succeeded = pos.remaining_pct < old_remaining
                     _dbg("position_manager.py:tp1_sell", "tp1_sell_result", {"hypothesisId":"H-D","token":pos.token_mint[:12],"sell_succeeded":sell_succeeded,"remaining_before":old_remaining,"remaining_after":pos.remaining_pct})
                     # #endregion
-                    pos.tp1_sold = True
+                    if pos.remaining_pct < old_remaining:
+                        pos.tp1_sold = True
 
         # --- Trailing TP2 ---
-        if not pos.tp2_sold and multiplier >= self.cfg.tp2_trigger:
+        if not pos.tp2_sold and (pos.tp2_triggered or multiplier >= self.cfg.tp2_trigger):
             if not pos.tp2_triggered:
                 pos.tp2_triggered = True
                 pos.tp2_max_sol = current_sol
@@ -165,7 +166,8 @@ class PositionManager:
                     sell_succeeded2 = pos.remaining_pct < old_remaining2
                     _dbg("position_manager.py:tp2_sell", "tp2_sell_result", {"hypothesisId":"H-D","token":pos.token_mint[:12],"sell_succeeded":sell_succeeded2,"remaining_before":old_remaining2,"remaining_after":pos.remaining_pct})
                     # #endregion
-                    pos.tp2_sold = True
+                    if pos.remaining_pct < old_remaining2:
+                        pos.tp2_sold = True
 
         # Update DB
         await db.update_position(pos.pos_id, max_price_seen=pos.max_sol_value)
@@ -174,7 +176,7 @@ class PositionManager:
         self, pos: _TrackedPosition, sell_pct: float, reason: ExitReason
     ) -> None:
         """Sell a percentage of the ORIGINAL position (not remaining)."""
-        # sell_pct is always relative to the original total position
+        sell_pct = min(sell_pct, pos.remaining_pct)
         sell_tokens = int(pos.token_amount * (sell_pct / 100))
         if sell_tokens <= 0:
             return
@@ -207,6 +209,7 @@ class PositionManager:
                 side=trade.side,
                 amount_sol=trade.amount_sol,
                 token_amount=trade.token_amount,
+                price_per_token=trade.price_per_token,
                 tx_signature=trade.tx_signature,
                 wallet_address=trade.wallet_address,
             )

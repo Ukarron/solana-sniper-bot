@@ -21,15 +21,6 @@ from notifier import get_notifier
 
 logger = logging.getLogger(__name__)
 
-# #region agent log
-import json as _json
-def _dbg(loc, msg, data=None):
-    try:
-        with open("debug-a87027.log", "a") as _f:
-            _f.write(_json.dumps({"sessionId":"a87027","location":loc,"message":msg,"data":data or {},"timestamp":int(time.time()*1000)})+"\n")
-    except: pass
-# #endregion
-
 
 class PositionManager:
     def __init__(self, cfg: Config, executor: TradeExecutor, ev_calc=None) -> None:
@@ -88,13 +79,7 @@ class PositionManager:
             return
 
         current_sol = await self._get_position_sol_value(pos)
-        # #region agent log
-        _dbg("position_manager.py:_check_position", "value_check", {"hypothesisId":"H-B","token":pos.token_mint[:12],"current_sol":current_sol,"remaining_pct":pos.remaining_pct,"hold_hours":round(hold_hours,2),"max_hold":self.cfg.max_hold_time_hours})
-        # #endregion
         if current_sol is None or current_sol <= 0:
-            # #region agent log
-            _dbg("position_manager.py:_check_position", "value_is_none_early_return", {"hypothesisId":"H-B","token":pos.token_mint[:12],"hold_hours":round(hold_hours,2),"STUCK":hold_hours>=self.cfg.max_hold_time_hours})
-            # #endregion
             logger.debug("No SOL value for %s (remaining=%.0f%%)", pos.token_mint[:12], pos.remaining_pct)
             return
 
@@ -135,14 +120,8 @@ class PositionManager:
                     pos.tp1_max_sol = current_sol
                 tp1_sell_level = pos.tp1_max_sol * (1 - self.cfg.tp1_trailing_pct / 100)
                 if current_sol <= tp1_sell_level:
-                    # #region agent log
                     old_remaining = pos.remaining_pct
-                    # #endregion
                     await self._execute_sell(pos, self.cfg.tp1_sell_pct, ExitReason.TP1)
-                    # #region agent log
-                    sell_succeeded = pos.remaining_pct < old_remaining
-                    _dbg("position_manager.py:tp1_sell", "tp1_sell_result", {"hypothesisId":"H-D","token":pos.token_mint[:12],"sell_succeeded":sell_succeeded,"remaining_before":old_remaining,"remaining_after":pos.remaining_pct})
-                    # #endregion
                     if pos.remaining_pct < old_remaining:
                         pos.tp1_sold = True
 
@@ -158,14 +137,8 @@ class PositionManager:
                     pos.tp2_max_sol = current_sol
                 tp2_sell_level = pos.tp2_max_sol * (1 - self.cfg.tp2_trailing_pct / 100)
                 if current_sol <= tp2_sell_level:
-                    # #region agent log
                     old_remaining2 = pos.remaining_pct
-                    # #endregion
                     await self._execute_sell(pos, self.cfg.tp2_sell_pct, ExitReason.TP2)
-                    # #region agent log
-                    sell_succeeded2 = pos.remaining_pct < old_remaining2
-                    _dbg("position_manager.py:tp2_sell", "tp2_sell_result", {"hypothesisId":"H-D","token":pos.token_mint[:12],"sell_succeeded":sell_succeeded2,"remaining_before":old_remaining2,"remaining_after":pos.remaining_pct})
-                    # #endregion
                     if pos.remaining_pct < old_remaining2:
                         pos.tp2_sold = True
 

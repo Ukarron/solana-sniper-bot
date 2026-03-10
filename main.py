@@ -48,15 +48,6 @@ from utils import Timer
 
 logger = logging.getLogger("sniper")
 
-# #region agent log
-import json as _json, time as _time
-def _dbg(loc, msg, data=None):
-    try:
-        with open("debug-a87027.log", "a") as _f:
-            _f.write(_json.dumps({"sessionId":"a87027","location":loc,"message":msg,"data":data or {},"timestamp":int(_time.time()*1000)})+"\n")
-    except: pass
-# #endregion
-
 
 async def process_new_pool(
     pool: PoolInfo,
@@ -100,11 +91,6 @@ async def process_new_pool(
         )
         await db.increment_daily_stat("pools_detected")
 
-        # #region agent log
-        if pool_id == 0:
-            _dbg("main.py:save_pool", "pool_id_is_zero", {"hypothesisId":"H-C","token":pool.token_mint[:12],"signature":pool.signature[:20]})
-        # #endregion
-
         # КРОК 1.5: Minimum liquidity check
         if pool.initial_liquidity_sol > 0 and pool.initial_liquidity_sol < cfg.min_liquidity_sol:
             flog.skip_reason = f"liquidity: {pool.initial_liquidity_sol:.1f} < {cfg.min_liquidity_sol} SOL"
@@ -128,18 +114,12 @@ async def process_new_pool(
             for i, r in enumerate(results):
                 if isinstance(r, Exception):
                     names = ["safety", "creator", "legitimacy"]
-                    # #region agent log
-                    _dbg("main.py:gather", "gather_exception_killed_pipeline", {"hypothesisId":"H-A","token":pool.token_mint[:12],"error":str(r),"error_type":type(r).__name__,"filter":names[i]})
-                    # #endregion
                     logger.warning("Filter %s failed for %s: %s", names[i], pool.token_mint[:12], r)
                     flog.skip_reason = f"{names[i]} exception: {r}"
                     await _save_filter_result(db, pool_id, flog, timer)
                     return
             safety, creator, legitimacy = results
-        except Exception as _gather_err:
-            # #region agent log
-            _dbg("main.py:gather", "gather_exception_killed_pipeline", {"hypothesisId":"H-A","token":pool.token_mint[:12],"error":str(_gather_err),"error_type":type(_gather_err).__name__,"filter":"unknown"})
-            # #endregion
+        except Exception:
             raise
 
         flog.safety = safety

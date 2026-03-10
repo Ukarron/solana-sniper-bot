@@ -139,7 +139,12 @@ async def process_new_pool(
         flog.legitimacy = legitimacy
         if legitimacy.score < cfg.min_legitimacy_score:
             flog.skip_reason = f"legitimacy: score {legitimacy.score} < {cfg.min_legitimacy_score}"
-            logger.info("SKIP [legitimacy] %s: score %d", pool.token_mint[:12], legitimacy.score)
+            logger.info("SKIP [legitimacy] %s: score %d too low", pool.token_mint[:12], legitimacy.score)
+            await _save_filter_result(db, pool_id, flog, timer)
+            return
+        if legitimacy.score > cfg.max_legitimacy_score:
+            flog.skip_reason = f"legitimacy: score {legitimacy.score} > {cfg.max_legitimacy_score}"
+            logger.info("SKIP [legitimacy] %s: score %d too high (suspicious)", pool.token_mint[:12], legitimacy.score)
             await _save_filter_result(db, pool_id, flog, timer)
             return
 
@@ -177,29 +182,40 @@ async def process_new_pool(
         pool.token_symbol or pool.token_mint[:12], pool.source.value, timer.elapsed_ms,
     )
 
-    # КРОК 4.7: Momentum check — verify price is not dumping
+    # КРОК 4.7: Multi-sample momentum check — verify price is rising
     try:
         jup = executor.jupiter
         test_amount = 100_000_000  # 0.1 SOL
-        q1 = await jup.get_quote(cfg.SOL_MINT, pool.token_mint, test_amount, cfg.max_slippage_bps)
-        tokens_t1 = int(q1["outAmount"]) if q1 and q1.get("outAmount") else 0
-        if tokens_t1 > 0:
-            await asyncio.sleep(3)
-            q2 = await jup.get_quote(cfg.SOL_MINT, pool.token_mint, test_amount, cfg.max_slippage_bps)
-            tokens_t2 = int(q2["outAmount"]) if q2 and q2.get("outAmount") else 0
-            if tokens_t2 > 0:
-                # More tokens for same SOL = price dropped
-                price_change = (tokens_t1 - tokens_t2) / tokens_t1
-                if price_change < -0.10:
-                    logger.info(
-                        "SKIP [momentum] %s: price dropping %.1f%%",
-                        pool.token_mint[:12], price_change * 100,
-                    )
-                    return
+        samples: list[int] = []
+        for i in range(cfg.momentum_check_samples):
+            q = await jup.get_quote(cfg.SOL_MINT, pool.token_mint, test_amount, cfg.max_slippage_bps)
+            tokens = int(q["outAmount"]) if q and q.get("outAmount") else 0
+            if tokens <= 0:
+                break
+            samples.append(tokens)
+            if i < cfg.momentum_check_samples - 1:
+                await asyncio.sleep(cfg.momentum_check_interval_sec)
+
+        if len(samples) >= 2:
+            # Fewer tokens for same SOL = price rising (positive = price up)
+            total_change = (samples[0] - samples[-1]) / samples[0]
+
+            if total_change < cfg.momentum_max_drop_pct / 100:
                 logger.info(
-                    "Momentum OK for %s: %.1f%% price change",
-                    pool.token_mint[:12], price_change * 100,
+                    "SKIP [momentum] %s: price dropping %.1f%% over %d samples",
+                    pool.token_mint[:12], total_change * 100, len(samples),
                 )
+                return
+            if total_change < cfg.momentum_min_rise_pct / 100:
+                logger.info(
+                    "SKIP [momentum] %s: price flat/weak %.1f%% (need >%.1f%%)",
+                    pool.token_mint[:12], total_change * 100, cfg.momentum_min_rise_pct,
+                )
+                return
+            logger.info(
+                "Momentum OK for %s: %.1f%% total change (%d samples)",
+                pool.token_mint[:12], total_change * 100, len(samples),
+            )
     except Exception as e:
         logger.debug("Momentum check error: %s", e)
 

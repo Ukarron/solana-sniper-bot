@@ -83,13 +83,20 @@ class Config:
 
     # ── Legitimacy filter ─────────────────────────────────
     min_legitimacy_score: int = 0
+    max_legitimacy_score: int = 2
     website_min_content_length: int = 500
     website_check_timeout_sec: int = 5
 
     # ── Early activity filter ─────────────────────────────
     wait_before_analysis_sec: int = 15
-    min_unique_buyers: int = 3
-    max_single_buyer_pct: float = 50.0
+    min_unique_buyers: int = 15
+    max_single_buyer_pct: float = 40.0
+
+    # ── Momentum filter ────────────────────────────────────
+    momentum_check_samples: int = 3
+    momentum_check_interval_sec: int = 3
+    momentum_min_rise_pct: float = 0.0
+    momentum_max_drop_pct: float = -5.0
 
     # ── Trading ───────────────────────────────────────────
     buy_amount_sol: float = 0.1
@@ -175,8 +182,14 @@ class Config:
             honeypot_max_retries=_env_int("HONEYPOT_MAX_RETRIES", 2),
             # Early activity
             wait_before_analysis_sec=_env_int("WAIT_BEFORE_ANALYSIS_SEC", 15),
-            min_unique_buyers=_env_int("MIN_UNIQUE_BUYERS", 3),
-            max_single_buyer_pct=_env_float("MAX_SINGLE_BUYER_PCT", 50.0),
+            min_unique_buyers=_env_int("MIN_UNIQUE_BUYERS", 15),
+            max_single_buyer_pct=_env_float("MAX_SINGLE_BUYER_PCT", 40.0),
+            max_legitimacy_score=_env_int("MAX_LEGITIMACY_SCORE", 2),
+            # Momentum
+            momentum_check_samples=_env_int("MOMENTUM_CHECK_SAMPLES", 3),
+            momentum_check_interval_sec=_env_int("MOMENTUM_CHECK_INTERVAL_SEC", 3),
+            momentum_min_rise_pct=_env_float("MOMENTUM_MIN_RISE_PCT", 0.0),
+            momentum_max_drop_pct=_env_float("MOMENTUM_MAX_DROP_PCT", -5.0),
             # TP / SL
             stop_loss_pct=_env_float("STOP_LOSS_PCT", 35.0),
             tp1_trigger=_env_float("TP1_TRIGGER", 2.0),

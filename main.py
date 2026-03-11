@@ -1,17 +1,19 @@
 """
 Solana Smart Sniping Bot — entry point.
 
-Pipeline:
-  КРОК 0: Macro filter (background, hourly)
-  КРОК 1: Pool detection (WebSocket)
-  КРОК 2: Safety filter (Rugcheck + on-chain + honeypot)
-  КРОК 2.5: Creator analysis
-  КРОК 3: Legitimacy filter
-  КРОК 4: Early activity analysis
-  КРОК 4.5: EV filter
-  КРОК 5: Trade execution (Jupiter + Jito)
-  КРОК 6: Position management (trailing TP/SL)
-  КРОК 7: Logging & reporting
+Pipeline ("Confirm Then Snipe"):
+  КРОК 0:    Macro filter (background, hourly)
+  КРОК 1:    Pool detection (WebSocket)
+  КРОК 1.5:  Minimum liquidity check
+  КРОК 2-3:  Safety / Creator / Legitimacy (parallel)
+  КРОК 4:    Early activity analysis (15s wait)
+  КРОК 4.3:  DexScreener real-time validation (price, volume, buy pressure)
+  КРОК 4.4:  Quality scoring (0-100, threshold >= 60)
+  КРОК 4.45: Trade rate limiting (max 3/h, 10/d)
+  КРОК 4.5:  EV filter
+  КРОК 4.7:  Multi-sample momentum (4 samples, 20s, require 3%+ rise)
+  КРОК 5:    Trade execution (Jupiter + Jito)
+  КРОК 6:    Position management (trailing TP/SL)
 """
 
 from __future__ import annotations
@@ -21,7 +23,9 @@ import html
 import logging
 import os
 import signal
+import time
 
+from collections import deque
 from datetime import datetime, timedelta
 
 try:
@@ -44,9 +48,33 @@ from ev_calculator import EVCalculator
 from macro_filter import MacroFilter
 from trade_executor import TradeExecutor
 from position_manager import PositionManager
+from api_clients.dexscreener import DexScreenerClient
+from quality_scorer import compute_quality_score
 from utils import Timer
 
 logger = logging.getLogger("sniper")
+
+# Trade rate limiter — tracks timestamps of executed trades
+_trade_timestamps: deque[float] = deque()
+
+
+def _check_rate_limit(cfg: Config) -> str | None:
+    """Return a skip reason if rate limit exceeded, else None."""
+    now = time.time()
+    hour_ago = now - 3600
+    day_start = now - 86400
+
+    while _trade_timestamps and _trade_timestamps[0] < day_start:
+        _trade_timestamps.popleft()
+
+    trades_last_hour = sum(1 for t in _trade_timestamps if t >= hour_ago)
+    trades_last_day = len(_trade_timestamps)
+
+    if trades_last_hour >= cfg.max_trades_per_hour:
+        return f"rate_limit: {trades_last_hour}/{cfg.max_trades_per_hour} trades this hour"
+    if trades_last_day >= cfg.max_trades_per_day:
+        return f"rate_limit: {trades_last_day}/{cfg.max_trades_per_day} trades today"
+    return None
 
 
 async def process_new_pool(
@@ -56,6 +84,7 @@ async def process_new_pool(
     ev_calc: EVCalculator,
     executor: TradeExecutor,
     pos_mgr: PositionManager,
+    dex_client: DexScreenerClient,
 ) -> None:
     """Run the full filter pipeline on a newly detected pool."""
     db = get_db()
@@ -160,6 +189,63 @@ async def process_new_pool(
             await _save_filter_result(db, pool_id, flog, timer)
             return
 
+        # КРОК 4.3: DexScreener real-time validation
+        dex_metrics = await dex_client.get_pair_metrics(pool.token_mint)
+        if not dex_metrics.available:
+            flog.skip_reason = "dexscreener: no data available (token not gaining traction)"
+            logger.info("SKIP [dexscreener] %s: no pair data found", pool.token_mint[:12])
+            await _save_filter_result(db, pool_id, flog, timer)
+            return
+
+        if cfg.dex_require_rising and not dex_metrics.is_rising:
+            flog.skip_reason = f"dexscreener: price falling (5m change {dex_metrics.price_change_m5:+.1f}%)"
+            logger.info("SKIP [dexscreener] %s: price not rising (%.1f%%)", pool.token_mint[:12], dex_metrics.price_change_m5)
+            await _save_filter_result(db, pool_id, flog, timer)
+            return
+
+        if cfg.dex_require_buy_pressure and not dex_metrics.has_buy_pressure:
+            flog.skip_reason = f"dexscreener: sells >= buys ({dex_metrics.sells_m5}s vs {dex_metrics.buys_m5}b)"
+            logger.info("SKIP [dexscreener] %s: no buy pressure (%db/%ds)", pool.token_mint[:12], dex_metrics.buys_m5, dex_metrics.sells_m5)
+            await _save_filter_result(db, pool_id, flog, timer)
+            return
+
+        if cfg.dex_require_volume and not dex_metrics.has_volume:
+            flog.skip_reason = "dexscreener: zero h1 volume"
+            logger.info("SKIP [dexscreener] %s: no volume", pool.token_mint[:12])
+            await _save_filter_result(db, pool_id, flog, timer)
+            return
+
+        if dex_metrics.liquidity_usd < cfg.dex_min_liquidity_usd:
+            flog.skip_reason = f"dexscreener: low liquidity ${dex_metrics.liquidity_usd:.0f} < ${cfg.dex_min_liquidity_usd:.0f}"
+            logger.info("SKIP [dexscreener] %s: liquidity $%.0f < $%.0f", pool.token_mint[:12], dex_metrics.liquidity_usd, cfg.dex_min_liquidity_usd)
+            await _save_filter_result(db, pool_id, flog, timer)
+            return
+
+        logger.info(
+            "DexScreener OK for %s: 5m=%+.1f%% buys/sells=%d/%d vol_h1=$%.0f liq=$%.0f",
+            pool.token_mint[:12], dex_metrics.price_change_m5,
+            dex_metrics.buys_m5, dex_metrics.sells_m5,
+            dex_metrics.volume_h1_usd, dex_metrics.liquidity_usd,
+        )
+
+        # КРОК 4.4: Quality scoring
+        quality = compute_quality_score(activity, dex_metrics, safety, creator, legitimacy)
+        logger.info("Quality %s: %s", pool.token_mint[:12], quality.summary())
+
+        if quality.total < cfg.min_quality_score:
+            flog.skip_reason = f"quality: score {quality.total} < {cfg.min_quality_score}"
+            logger.info("SKIP [quality] %s: score %d < %d", pool.token_mint[:12], quality.total, cfg.min_quality_score)
+            await _save_filter_result(db, pool_id, flog, timer)
+            return
+
+        # КРОК 4.45: Trade rate limiting
+        rate_reason = _check_rate_limit(cfg)
+        if rate_reason:
+            flog.skip_reason = rate_reason
+            logger.info("SKIP [rate] %s: %s", pool.token_mint[:12], rate_reason)
+            await _save_filter_result(db, pool_id, flog, timer)
+            return
+
         # КРОК 4.5: EV filter
         if not ev_calc.is_profitable:
             flog.skip_reason = f"ev: EV={ev_calc.ev:.1f} <= 0"
@@ -223,6 +309,7 @@ async def process_new_pool(
     buy_amount = cfg.buy_amount_sol * flog.macro_multiplier
     trade = await executor.buy(pool, buy_amount)
     if trade and trade.tx_signature:
+        _trade_timestamps.append(time.time())
         await db.mark_pool_bought(pool_id)
         await db.save_trade(
             pool_id=pool_id,
@@ -345,6 +432,7 @@ async def run_bot() -> None:
     )
     executor = TradeExecutor(cfg)
     pos_mgr = PositionManager(cfg, executor, ev_calc)
+    dex_client = DexScreenerClient()
 
     # Shutdown coordination
     shutdown_event = asyncio.Event()
@@ -381,7 +469,7 @@ async def run_bot() -> None:
 
     async def on_new_pool(pool: PoolInfo) -> None:
         try:
-            await process_new_pool(pool, cfg, macro, ev_calc, executor, pos_mgr)
+            await process_new_pool(pool, cfg, macro, ev_calc, executor, pos_mgr, dex_client)
         except Exception:
             logger.exception("Error processing pool %s", pool.token_mint[:12])
 
@@ -404,6 +492,7 @@ async def run_bot() -> None:
         except (asyncio.CancelledError, Exception):
             pass
 
+    await dex_client.close()
     await executor.close()
     await notifier.stop()
     await db.close()

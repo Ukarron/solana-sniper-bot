@@ -220,7 +220,9 @@ class PositionManager:
                 self._positions.pop(pos.pos_id, None)
                 if self._ev_calc:
                     try:
-                        await self._ev_calc.update_from_db()
+                        await self._ev_calc.update_from_db(
+                            buy_amount_sol=self.cfg.buy_amount_sol,
+                        )
                     except Exception:
                         pass
 

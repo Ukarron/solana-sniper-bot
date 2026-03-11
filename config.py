@@ -93,10 +93,23 @@ class Config:
     max_single_buyer_pct: float = 40.0
 
     # ── Momentum filter ────────────────────────────────────
-    momentum_check_samples: int = 3
-    momentum_check_interval_sec: int = 3
-    momentum_min_rise_pct: float = 0.0
+    momentum_check_samples: int = 4
+    momentum_check_interval_sec: int = 5
+    momentum_min_rise_pct: float = 3.0
     momentum_max_drop_pct: float = -5.0
+
+    # ── DexScreener validation ──────────────────────────────
+    dex_min_liquidity_usd: float = 500.0
+    dex_require_rising: bool = True
+    dex_require_buy_pressure: bool = True
+    dex_require_volume: bool = True
+
+    # ── Quality scoring ─────────────────────────────────────
+    min_quality_score: int = 60
+
+    # ── Trade rate limiting ─────────────────────────────────
+    max_trades_per_hour: int = 3
+    max_trades_per_day: int = 10
 
     # ── Trading ───────────────────────────────────────────
     buy_amount_sol: float = 0.1
@@ -107,7 +120,7 @@ class Config:
     use_jito: bool = True
 
     # ── Take-profits (trailing) ───────────────────────────
-    tp1_trigger: float = 2.0
+    tp1_trigger: float = 1.5
     tp1_trailing_pct: float = 20.0
     tp1_sell_pct: float = 40.0
     tp2_trigger: float = 4.0
@@ -116,8 +129,8 @@ class Config:
     remaining_pct: float = 30.0
 
     # ── Stop-losses (trailing) ────────────────────────────
-    stop_loss_pct: float = 35.0
-    trailing_stop_activation: float = 1.8
+    stop_loss_pct: float = 25.0
+    trailing_stop_activation: float = 1.3
     trailing_stop_pct: float = 30.0
     emergency_lp_drop_pct: float = 25.0
     max_hold_time_hours: int = 12
@@ -186,19 +199,28 @@ class Config:
             max_single_buyer_pct=_env_float("MAX_SINGLE_BUYER_PCT", 40.0),
             max_legitimacy_score=_env_int("MAX_LEGITIMACY_SCORE", 2),
             # Momentum
-            momentum_check_samples=_env_int("MOMENTUM_CHECK_SAMPLES", 3),
-            momentum_check_interval_sec=_env_int("MOMENTUM_CHECK_INTERVAL_SEC", 3),
-            momentum_min_rise_pct=_env_float("MOMENTUM_MIN_RISE_PCT", 0.0),
+            momentum_check_samples=_env_int("MOMENTUM_CHECK_SAMPLES", 4),
+            momentum_check_interval_sec=_env_int("MOMENTUM_CHECK_INTERVAL_SEC", 5),
+            momentum_min_rise_pct=_env_float("MOMENTUM_MIN_RISE_PCT", 3.0),
             momentum_max_drop_pct=_env_float("MOMENTUM_MAX_DROP_PCT", -5.0),
+            # DexScreener validation
+            dex_min_liquidity_usd=_env_float("DEX_MIN_LIQUIDITY_USD", 500.0),
+            dex_require_rising=_env_bool("DEX_REQUIRE_RISING", True),
+            dex_require_buy_pressure=_env_bool("DEX_REQUIRE_BUY_PRESSURE", True),
+            dex_require_volume=_env_bool("DEX_REQUIRE_VOLUME", True),
+            # Quality scoring & rate limiting
+            min_quality_score=_env_int("MIN_QUALITY_SCORE", 60),
+            max_trades_per_hour=_env_int("MAX_TRADES_PER_HOUR", 3),
+            max_trades_per_day=_env_int("MAX_TRADES_PER_DAY", 10),
             # TP / SL
-            stop_loss_pct=_env_float("STOP_LOSS_PCT", 35.0),
-            tp1_trigger=_env_float("TP1_TRIGGER", 2.0),
+            stop_loss_pct=_env_float("STOP_LOSS_PCT", 25.0),
+            tp1_trigger=_env_float("TP1_TRIGGER", 1.5),
             tp1_trailing_pct=_env_float("TP1_TRAILING_PCT", 20.0),
             tp1_sell_pct=_env_float("TP1_SELL_PCT", 40.0),
             tp2_trigger=_env_float("TP2_TRIGGER", 4.0),
             tp2_trailing_pct=_env_float("TP2_TRAILING_PCT", 25.0),
             tp2_sell_pct=_env_float("TP2_SELL_PCT", 30.0),
-            trailing_stop_activation=_env_float("TRAILING_STOP_ACTIVATION", 1.8),
+            trailing_stop_activation=_env_float("TRAILING_STOP_ACTIVATION", 1.3),
             trailing_stop_pct=_env_float("TRAILING_STOP_PCT", 30.0),
             max_hold_time_hours=_env_int("MAX_HOLD_TIME_HOURS", 12),
             # Risk management

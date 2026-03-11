@@ -39,8 +39,11 @@ class EVCalculator:
         total = self.avg_profit_pct + self.avg_loss_pct
         return self.avg_loss_pct / total if total > 0 else 1.0
 
-    async def update_from_db(self, days: int = 7) -> bool:
+    async def update_from_db(self, days: int = 7, buy_amount_sol: float = 0.1) -> bool:
         """Update win rate and avg profit/loss from real trade data.
+
+        Converts SOL values to percentages relative to buy_amount_sol so the
+        EV formula (which uses percentages) stays consistent.
 
         Returns True if enough data was available (30+ trades).
         """
@@ -50,12 +53,12 @@ class EVCalculator:
             return False
 
         self.win_rate = stats["win_rate"]
-        if stats["avg_win_sol"] > 0 and stats["avg_loss_sol"] > 0:
-            self.avg_profit_pct = stats["avg_win_sol"] * 100
-            self.avg_loss_pct = stats["avg_loss_sol"] * 100
+        if stats["avg_win_sol"] > 0 and stats["avg_loss_sol"] > 0 and buy_amount_sol > 0:
+            self.avg_profit_pct = (stats["avg_win_sol"] / buy_amount_sol) * 100
+            self.avg_loss_pct = (stats["avg_loss_sol"] / buy_amount_sol) * 100
 
         logger.info(
-            "EV updated from DB: win_rate=%.1f%% EV=%.1f profit=%.1f loss=%.1f",
+            "EV updated from DB: win_rate=%.1f%% EV=%.1f profit_pct=%.1f loss_pct=%.1f",
             self.win_rate * 100, self.ev, self.avg_profit_pct, self.avg_loss_pct,
         )
         return True
